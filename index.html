@@ -222,26 +222,22 @@
             <div class="profile-container">
                 <div class="profile-header">
                     <div class="avatar-wrapper">
-                        <img id="profile-avatar-large" src="adventurerNeutral-1781632109142.png" alt="Аватар">
-                        <div class="avatar-input-group">
-                            <input type="text" id="avatar-url-input" placeholder="Прямая ссылка на фото...">
-                            <button id="save-avatar-btn">✓</button>
-                        </div>
+                        <img id="profile-avatar-large" src="adventurerNeutral-1781632109142.png" alt="Аватар" title="Нажмите, чтобы изменить" class="clickable">
                     </div>
                     <div class="user-details">
-                        <h2 id="username-display">~mrrw meow :3</h2>
-                        <p class="user-status">История боев: <span id="total-games-played">два мильёона штук 👑</span></p>
+                        <h2 id="username-display" class="clickable" title="Нажмите, чтобы изменить">Игрок_123</h2>
+                        <p class="user-status">Всего боев: <span id="total-games-played">0</span></p>
                     </div>
                 </div>
 
                 <div class="profile-stats">
-                    <h3>СТРАНИЦА - КОНЦЕПТ. ПОТОМ ДОРАБОТАЮ.<br><br>Сыграно квизов</h3>
+                    <h3>Сыграно матчей</h3>
                     <div class="stats-grid">
-                        <div class="stat-card">Случайно<br><b>0</b></div>
-                        <div class="stat-card">Эта лучше!<br><b>0</b></div>
-                        <div class="stat-card">Континент<br><b>0</b></div>
-                        <div class="stat-card">Турнир<br><b>0</b></div>
-                        <div class="stat-card">Вслепую<br><b>0</b></div>
+                        <div class="stat-card" data-stat="winner-stays">Мой выбор!<br><b id="stat-winner-stays">0</b></div>
+                        <div class="stat-card" data-stat="classic">Случайно<br><b id="stat-classic">0</b></div>
+                        <div class="stat-card" data-stat="continental">Континент<br><b id="stat-continental">0</b></div>
+                        <div class="stat-card" data-stat="tournament">Турнир<br><b id="stat-tournament">0</b></div>
+                        <div class="stat-card" data-stat="blind">Вслепую<br><b id="stat-blind">0</b></div>
                     </div>
                 </div>
 
@@ -257,9 +253,9 @@
                     <div class="leaderboard">
                         <h3>Топ стран</h3>
                         <ol>
-                            <li>Мавритания <span>(12331 побед)</span></li>
-                            <li>Южный Судан <span>(9128 побед)</span></li>
-                            <li>Афганистан <span>(7288 побед)</span></li>
+                            <li>Мавритания <span>(3 побед)</span></li>
+                            <li>Южный Судан <span>(2 побед)</span></li>
+                            <li>Афганистан <span>(1 побед)</span></li>
                         </ol>
                     </div>
                 </div>
@@ -271,12 +267,18 @@
             <div class="modal-content">
                 <h3 id="modal-title">Внимание</h3>
                 <p id="modal-message"></p>
+                <div id="modal-input-container" class="hidden">
+                    <input type="text" id="modal-input-field">
+                </div>
                 <div class="modal-actions">
                     <button id="modal-yes">Да</button>
                     <button id="modal-no">Нет</button>
                 </div>
             </div>
         </div>
+
+        <!-- Уведомление -->
+        <div id="toast" class="toast hidden">Настройки обновлены!</div>
 
         <!-- Лоадер -->
         <div id="loader" class="hidden">
@@ -285,6 +287,8 @@
         </div>
     </div>
 
+    <!-- GUN DB for Real Global Leaderboards -->
+    <script src="https://cdn.jsdelivr.net/npm/gun/gun.js"></script>
     <script src="script.js"></script>
 </body>
 </html>

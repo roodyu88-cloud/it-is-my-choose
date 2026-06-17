@@ -19,12 +19,120 @@ let consecutiveWinner = null;
 let consecutiveCount = 0;
 let askedAboutWinner = false;
 
+// Global Real-Time Stats (GunDB)
+const gun = Gun(['https://gun-manhattan.herokuapp.com/gun']);
+const globalCountryRef = gun.get('countryChoiceQuiz_countries_v1');
+const globalPlayersRef = gun.get('countryChoiceQuiz_players_v1');
+
+// Persistence & Local Data
+let userData = {
+    userId: localStorage.getItem('countryQuiz_userId') || 'user_' + Math.random().toString(36).substr(2, 9),
+    username: "Игрок_123",
+    avatar: "adventurerNeutral-1781632109142.png",
+    stats: {
+        "winner-stays": 0,
+        classic: 0,
+        continental: 0,
+        tournament: 0,
+        blind: 0
+    },
+    totalGames: 0
+};
+
+// Local cache for leaderboards
+let leaderboardCountries = {};
+let leaderboardPlayers = {};
+
+function loadUserData() {
+    if (!localStorage.getItem('countryQuiz_userId')) {
+        localStorage.setItem('countryQuiz_userId', userData.userId);
+    }
+
+    const saved = localStorage.getItem('countryQuiz_userData');
+    if (saved) {
+        const parsed = JSON.parse(saved);
+        userData = { ...userData, ...parsed, stats: { ...userData.stats, ...(parsed.stats || {}) } };
+    }
+    
+    // Sync current player to global DB
+    syncPlayerToGlobal();
+    
+    // Listen for global changes
+    globalCountryRef.map().on((count, name) => {
+        leaderboardCountries[name] = count;
+        renderLeaderboards();
+    });
+
+    globalPlayersRef.map().on((data, id) => {
+        if (data) leaderboardPlayers[id] = data;
+        renderLeaderboards();
+    });
+
+    updateProfileUI();
+}
+
+function syncPlayerToGlobal() {
+    globalPlayersRef.get(userData.userId).put({
+        name: userData.username,
+        games: userData.totalGames
+    });
+}
+
+function saveUserData() {
+    localStorage.setItem('countryQuiz_userData', JSON.stringify(userData));
+    syncPlayerToGlobal();
+}
+
+function updateProfileUI() {
+    document.getElementById('username-display').textContent = userData.username;
+    document.getElementById('profile-avatar-large').src = userData.avatar;
+    document.getElementById('user-avatar-img').src = userData.avatar;
+    document.getElementById('total-games-played').textContent = userData.totalGames;
+    
+    for (const [mode, count] of Object.entries(userData.stats)) {
+        const el = document.getElementById(`stat-${mode}`);
+        if (el) el.textContent = count;
+    }
+    renderLeaderboards();
+}
+
+function renderLeaderboards() {
+    const playersList = document.querySelector('.leaderboard:first-child ol');
+    const countriesList = document.querySelector('.leaderboard:last-child ol');
+
+    if (!playersList || !countriesList) return;
+
+    // Players: Sort by games
+    const sortedPlayers = Object.values(leaderboardPlayers)
+        .sort((a, b) => (b.games || 0) - (a.games || 0));
+    
+    playersList.innerHTML = sortedPlayers.slice(0, 5).map(p => 
+        `<li>${p.name || 'Аноним'} <span>(${p.games || 0} игр)</span></li>`
+    ).join('');
+
+    // Countries: Sort by choices
+    const sortedCountries = Object.entries(leaderboardCountries)
+        .sort((a, b) => b[1] - a[1]);
+    
+    countriesList.innerHTML = sortedCountries.slice(0, 5).map(([name, count]) => 
+        `<li>${name} <span>(${count} побед)</span></li>`
+    ).join('');
+}
+
+function recordCountryChoice(countryName) {
+    // Increment global count
+    globalCountryRef.get(countryName).once((current) => {
+        globalCountryRef.get(countryName).put((current || 0) + 1);
+    });
+}
+
 // DOM Elements
 const screens = {
     menu: document.getElementById('main-menu'),
     game: document.getElementById('game-screen'),
     result: document.getElementById('result-screen'),
-    profile: document.getElementById('profile-screen')
+    profile: document.getElementById('profile-screen'),
+    modal: document.getElementById('custom-modal')
 };
 
 const loader = document.getElementById('loader');
@@ -43,6 +151,7 @@ const nextRoundBtn = document.getElementById('next-round-btn');
 
 // Initialize
 async function init() {
+    loadUserData();
     showLoader();
     try {
         const response = await fetch('https://unpkg.com/world-countries@3.0.0/countries.json');
@@ -54,7 +163,7 @@ async function init() {
             flags: { svg: `https://flagcdn.com/w320/${c.cca2.toLowerCase()}.png` },
             capital: c.capital ? c.capital : [],
             region: c.region,
-            population: c.area * 100, // mock population based on area for filter
+            population: c.area * 100, 
             independent: c.independent !== false
         }));
 
@@ -70,15 +179,27 @@ async function init() {
     }
 }
 
+// UI Components
+function showToast(message) {
+    const toast = document.getElementById('toast');
+    toast.textContent = message;
+    toast.classList.remove('hidden');
+    void toast.offsetWidth; 
+    toast.classList.add('show');
+    
+    setTimeout(() => {
+        toast.classList.remove('show');
+        setTimeout(() => toast.classList.add('hidden'), 400);
+    }, 2500);
+}
+
 function setupEventListeners() {
-    // Mode selection (exclude ones with complex buttons inside like continent and tourney)
     document.querySelectorAll('.mode-btn:not(.tournament-card):not(.continent-card)').forEach(btn => {
         btn.addEventListener('click', () => {
             if(!isAnimating) startGame(btn.dataset.mode);
         });
     });
 
-    // Continent Card itself triggers continental mode
     const continentCard = document.querySelector('.continent-card');
     if (continentCard) {
         continentCard.addEventListener('click', () => {
@@ -86,7 +207,6 @@ function setupEventListeners() {
         });
     }
 
-    // Tournament Card itself triggers tournament
     const tourneyCard = document.querySelector('.tournament-card');
     if (tourneyCard) {
         tourneyCard.addEventListener('click', () => {
@@ -94,7 +214,32 @@ function setupEventListeners() {
         });
     }
 
-    // Pills logic
+    [hideNamesCb, flagsOnlyCb].forEach(cb => {
+        cb.addEventListener('change', () => {
+            showToast("Настройки успешно применены!");
+        });
+    });
+
+    document.getElementById('username-display').addEventListener('click', async () => {
+        const newName = await showModal("Смена имени", "Введите новый никнейм:", false, true, userData.username);
+        if (newName && typeof newName === 'string') {
+            userData.username = newName.trim();
+            saveUserData();
+            updateProfileUI();
+            showToast("Имя профиля обновлено!");
+        }
+    });
+
+    document.getElementById('profile-avatar-large').addEventListener('click', async () => {
+        const newUrl = await showModal("Смена аватара", "Введите прямую ссылку на изображение:", false, true, userData.avatar);
+        if (newUrl && typeof newUrl === 'string') {
+            userData.avatar = newUrl.trim();
+            saveUserData();
+            updateProfileUI();
+            showToast("Аватар успешно изменен!");
+        }
+    });
+
     document.querySelectorAll('#tourney-size .pill').forEach(pill => {
         pill.addEventListener('click', (e) => {
             e.stopPropagation();
@@ -113,18 +258,14 @@ function setupEventListeners() {
         });
     });
 
-    // Card clicks
     cards.left.addEventListener('click', () => handleSelection('left'));
     cards.right.addEventListener('click', () => handleSelection('right'));
 
-    // Navigation
     document.getElementById('back-to-menu').addEventListener('click', showMenu);
     document.getElementById('restart-btn').addEventListener('click', showMenu);
     
-    // Finish early
     finishEarlyBtn.addEventListener('click', () => {
         if(isAnimating) {
-            // If they click finish early WHILE animating, just instantly win with the selected country
             if(window.pendingWinner) {
                 clearTimeout(advanceTimeout);
                 showResultScreenEarly(window.pendingWinner);
@@ -136,26 +277,147 @@ function setupEventListeners() {
         finishEarlyBtn.classList.add('highlight');
     });
 
-    // Skip wait button
     nextRoundBtn.addEventListener('click', () => {
         if(advanceTimeout) {
             clearTimeout(advanceTimeout);
             advanceGame();
         }
     });
+}
 
-    // Profile Avatar Save
-    const saveAvatarBtn = document.getElementById('save-avatar-btn');
-    if (saveAvatarBtn) {
-        saveAvatarBtn.addEventListener('click', () => {
-            const url = document.getElementById('avatar-url-input').value.trim();
-            if (url) {
-                document.getElementById('profile-avatar-large').src = url;
-                document.getElementById('user-avatar-img').src = url;
-                document.getElementById('avatar-url-input').value = '';
+function showModal(title, message, isAlert = false, hasInput = false, defaultValue = "") {
+    return new Promise(resolve => {
+        const modal = document.getElementById('custom-modal');
+        const titleEl = document.getElementById('modal-title');
+        const msgEl = document.getElementById('modal-message');
+        const inputContainer = document.getElementById('modal-input-container');
+        const inputField = document.getElementById('modal-input-field');
+        const yesBtn = document.getElementById('modal-yes');
+        const noBtn = document.getElementById('modal-no');
+
+        titleEl.textContent = title;
+        msgEl.textContent = message;
+        
+        if (hasInput) {
+            inputContainer.classList.remove('hidden');
+            inputField.value = defaultValue;
+            setTimeout(() => inputField.focus(), 100);
+        } else {
+            inputContainer.classList.add('hidden');
+        }
+
+        if (isAlert) {
+            noBtn.style.display = 'none';
+            yesBtn.textContent = 'ОК';
+        } else {
+            noBtn.style.display = 'inline-block';
+            yesBtn.textContent = hasInput ? 'Сохранить' : 'Да';
+            noBtn.textContent = hasInput ? 'Отмена' : 'Нет';
+        }
+
+        modal.style.display = 'flex';
+        void modal.offsetWidth;
+        modal.classList.add('active');
+        
+        const cleanup = () => {
+            modal.classList.remove('active');
+            setTimeout(() => { modal.style.display = 'none'; }, 300);
+            document.removeEventListener('keydown', keyHandler);
+            yesBtn.onclick = null;
+            noBtn.onclick = null;
+        };
+
+        const handleYes = () => { 
+            const val = hasInput ? inputField.value : true;
+            cleanup(); 
+            resolve(val); 
+        };
+        const handleNo = () => { cleanup(); resolve(false); };
+
+        yesBtn.onclick = handleYes;
+        noBtn.onclick = handleNo;
+
+        const keyHandler = (e) => {
+            if (e.key === 'Enter') {
+                e.preventDefault();
+                handleYes();
+            } else if (e.key === 'Escape') {
+                e.preventDefault();
+                handleNo();
             }
-        });
+        };
+        document.addEventListener('keydown', keyHandler);
+    });
+}
+
+async function advanceGame() {
+    isAnimating = false;
+    nextRoundBtn.classList.add('hidden');
+    
+    const selectedCountry = window.pendingWinner;
+    const container = document.querySelector('.cards-container');
+    
+    recordCountryChoice(selectedCountry.name.common);
+
+    if (consecutiveWinner && consecutiveWinner.name.common === selectedCountry.name.common) {
+        consecutiveCount++;
+    } else {
+        consecutiveWinner = selectedCountry;
+        consecutiveCount = 1;
+        askedAboutWinner = false;
     }
+
+    if (consecutiveCount === 5 && !askedAboutWinner) {
+        setTimeout(async () => {
+            const isThisIt = await showModal("Секундочку!", `Вы выбрали "${selectedCountry.name.common}" уже 5 раз подряд! Это ваша идеальная страна?`);
+            if (isThisIt) {
+                showResultScreenEarly(selectedCountry);
+            } else {
+                askedAboutWinner = true;
+                processNextRound(selectedCountry, container);
+            }
+        }, 50);
+        return;
+    } else if (consecutiveCount >= 10) {
+        await showModal("Победитель найден!", `Вы выбрали "${selectedCountry.name.common}" 10 раз подряд! Победитель определен автоматически.`, true);
+        showResultScreenEarly(selectedCountry);
+        return;
+    }
+
+    processNextRound(selectedCountry, container);
+}
+
+function processNextRound(selectedCountry, container) {
+    container.style.opacity = '0';
+    
+    setTimeout(() => {
+        cards.left.className = 'card';
+        cards.right.className = 'card';
+
+        if (isFinishingEarly) {
+            isFinishingEarly = false;
+            finishEarlyBtn.textContent = "Мой выбор!";
+            finishEarlyBtn.classList.remove('highlight');
+            
+            let nextOptions = [];
+            for(let i=0; i<4; i++) nextOptions.push(getRandomCountry());
+            showResult(selectedCountry, nextOptions);
+            container.style.opacity = '1';
+            return;
+        }
+
+        if (currentMode === 'classic' || currentMode === 'blind') {
+            setupClassicRound();
+        } else if (currentMode === 'winner-stays' || currentMode === 'continental') {
+            currentCardLeft = selectedCountry;
+            currentCardRight = getRandomCountry();
+            renderCards();
+        } else if (currentMode === 'tournament') {
+            advanceTournament(selectedCountry);
+        }
+        
+        setTimeout(() => { container.style.opacity = '1'; }, 50);
+    }, 300);
 }
 
 function showResultScreenEarly(selectedCountry) {
@@ -168,11 +430,15 @@ function showResultScreenEarly(selectedCountry) {
     showResult(selectedCountry, nextOptions);
 }
 
-// Game Flow
 function startGame(mode) {
     currentMode = mode;
     availableCountries = [...allCountries];
     
+    userData.totalGames++;
+    userData.stats[mode]++;
+    saveUserData();
+    updateProfileUI();
+
     if (hideNamesCb.checked) screens.game.classList.add('hide-names');
     else screens.game.classList.remove('hide-names');
     
@@ -185,6 +451,9 @@ function startGame(mode) {
     finishEarlyBtn.classList.remove('highlight');
     nextRoundBtn.classList.add('hidden');
     isAnimating = false;
+    consecutiveCount = 0;
+    consecutiveWinner = null;
+    askedAboutWinner = false;
 
     cards.left.className = 'card';
     cards.right.className = 'card';
@@ -215,7 +484,6 @@ function setupClassicRound() {
     renderCards();
 }
 
-// Rendering
 const imageCache = {};
 async function getImageUrl(country) {
     if (!country.capital || country.capital.length === 0) return null;
@@ -245,7 +513,6 @@ async function renderCard(element, country) {
     bgEl.style.backgroundImage = 'none';
     bgEl.classList.add('gradient-fallback');
     
-    // Always fetch image, CSS will hide it if needed
     const imgUrl = await getImageUrl(country);
     if (imgUrl) {
         bgEl.style.backgroundImage = `url('${imgUrl}')`;
@@ -258,7 +525,6 @@ function renderCards() {
     renderCard(cards.right, currentCardRight);
 }
 
-// Interaction logic
 function handleSelection(side) {
     if (isAnimating) return;
     isAnimating = true;
@@ -269,138 +535,14 @@ function handleSelection(side) {
 
     selectedElement.classList.add('selected');
     unselectedElement.classList.add('unselected');
-
-    // Force reveal BOTH cards info so user sees what they missed
     selectedElement.classList.add('revealed');
     unselectedElement.classList.add('revealed');
 
     window.pendingWinner = selectedCountry;
-    
     nextRoundBtn.classList.remove('hidden');
     advanceTimeout = setTimeout(advanceGame, 1500); 
 }
 
-function showModal(title, message, isAlert = false) {
-    return new Promise(resolve => {
-        const modal = document.getElementById('custom-modal');
-        const titleEl = document.getElementById('modal-title');
-        const msgEl = document.getElementById('modal-message');
-        const yesBtn = document.getElementById('modal-yes');
-        const noBtn = document.getElementById('modal-no');
-
-        titleEl.textContent = title;
-        msgEl.textContent = message;
-        
-        if (isAlert) {
-            noBtn.style.display = 'none';
-            yesBtn.textContent = 'ОК';
-        } else {
-            noBtn.style.display = 'inline-block';
-            yesBtn.textContent = 'Да';
-            noBtn.textContent = 'Нет';
-        }
-
-        modal.classList.add('active');
-        
-        const cleanup = () => {
-            modal.classList.remove('active');
-            document.removeEventListener('keydown', keyHandler);
-            yesBtn.onclick = null;
-            noBtn.onclick = null;
-        };
-
-        const handleYes = () => { cleanup(); resolve(true); };
-        const handleNo = () => { cleanup(); resolve(false); };
-
-        yesBtn.onclick = handleYes;
-        noBtn.onclick = handleNo;
-
-        const keyHandler = (e) => {
-            if (e.key === 'Enter' || e.key === ' ') {
-                e.preventDefault();
-                handleYes();
-            } else if (e.key === 'Escape' && !isAlert) {
-                e.preventDefault();
-                handleNo();
-            }
-        };
-        document.addEventListener('keydown', keyHandler);
-    });
-}
-
-async function advanceGame() {
-    isAnimating = false;
-    nextRoundBtn.classList.add('hidden');
-    
-    const selectedCountry = window.pendingWinner;
-    const container = document.querySelector('.cards-container');
-    
-    // Consecutive logic
-    if (consecutiveWinner && consecutiveWinner.name.common === selectedCountry.name.common) {
-        consecutiveCount++;
-    } else {
-        consecutiveWinner = selectedCountry;
-        consecutiveCount = 1;
-        askedAboutWinner = false;
-    }
-
-    if (consecutiveCount === 5 && !askedAboutWinner) {
-        // Wait a tiny bit for the UI, then show modal
-        setTimeout(async () => {
-            const isThisIt = await showModal("Секундочку!", `Вы выбрали "${selectedCountry.name.common}" уже 5 раз подряд! Это ваша идеальная страна?`);
-            if (isThisIt) {
-                showResultScreenEarly(selectedCountry);
-            } else {
-                askedAboutWinner = true;
-                processNextRound(selectedCountry, container);
-            }
-        }, 50);
-        return;
-    } else if (consecutiveCount >= 10) {
-        await showModal("Победитель найден!", `Вы выбрали "${selectedCountry.name.common}" 10 раз подряд! Победитель определен автоматически.`, true);
-        showResultScreenEarly(selectedCountry);
-        return;
-    }
-
-    processNextRound(selectedCountry, container);
-}
-
-function processNextRound(selectedCountry, container) {
-    // Fade out
-    container.style.opacity = '0';
-    
-    setTimeout(() => {
-        cards.left.className = 'card';
-        cards.right.className = 'card';
-
-        if (isFinishingEarly) {
-            isFinishingEarly = false;
-            finishEarlyBtn.textContent = "Мой выбор!";
-            finishEarlyBtn.classList.remove('highlight');
-            
-            let nextOptions = [];
-            for(let i=0; i<4; i++) nextOptions.push(getRandomCountry());
-            showResult(selectedCountry, nextOptions);
-            container.style.opacity = '1';
-            return;
-        }
-
-        if (currentMode === 'classic' || currentMode === 'blind') {
-            setupClassicRound();
-        } else if (currentMode === 'winner-stays' || currentMode === 'continental') {
-            currentCardLeft = selectedCountry;
-            currentCardRight = getRandomCountry();
-            renderCards();
-        } else if (currentMode === 'tournament') {
-            advanceTournament(selectedCountry);
-        }
-        
-        // Fade back in
-        setTimeout(() => { container.style.opacity = '1'; }, 50);
-    }, 300);
-}
-
-// Tournament Logic
 function setupTournament() {
     tournamentInfo.classList.remove('hidden');
     tournamentQueue = [];
@@ -468,8 +610,8 @@ function advanceTournament(winner) {
 async function showResult(winner, nextCountries = []) {
     document.getElementById('winner-name').textContent = winner.name.common;
     document.getElementById('winner-flag').src = winner.flags.svg;
+    recordCountryChoice(winner.name.common); 
     
-    // Set background to winner's capital image
     const bgEl = document.getElementById('result-bg');
     bgEl.style.backgroundImage = 'none';
     const imgUrl = await getImageUrl(winner);
@@ -494,8 +636,6 @@ async function showResult(winner, nextCountries = []) {
     switchScreen('result');
 }
 
-
-// Utils
 function switchScreen(screenName) {
     const active = document.querySelector('.screen.active');
     const next = screens[screenName];
@@ -519,5 +659,4 @@ function showMenu() { switchScreen('menu'); }
 function showLoader() { loader.classList.remove('hidden'); }
 function hideLoader() { loader.classList.add('hidden'); }
 
-// Run
 window.onload = init;
